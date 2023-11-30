@@ -1,5 +1,5 @@
 use proc_macro2::{Ident, Span, TokenStream};
-use quote::{quote, ToTokens};
+use quote::quote;
 use syn::{punctuated::Punctuated, Lifetime, Token};
 use syntax::CbitForExpr;
 
@@ -61,7 +61,7 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         control_flow_ty_use = quote! { OurControlFlow<#(#underscores),*> };
     }
 
-    // Define our initial layer of break layers
+    // Define our initial break layer
     let aborter = |resolution: TokenStream| {
         quote! {
             how_to_resolve_pending = #option_::Some(#resolution);
@@ -70,65 +70,73 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         }
     };
 
-    let wrap_absorber = |body: TokenStream, label: Option<&Lifetime>| -> TokenStream {
-        let break_aborter = match label {
-            Some(label) => {
-                let variant_name = derive_early_break_variant_name(label);
-                aborter(quote! {
-                    #ops_::ControlFlow::Break(OurControlFlowResult::#variant_name(break_result))
-                })
-            }
-            None => aborter(quote! {
-                #ops_::ControlFlow::Break(OurControlFlowResult::EarlyBreak(break_result))
-            }),
-        };
+    let for_body = input.body.body;
+    let for_body = {
+        let break_aborter = aborter(quote! {
+            #ops_::ControlFlow::Break(OurControlFlowResult::EarlyBreak(break_result))
+        });
 
-        let outer_label = match label {
-            Some(label) => Lifetime::new(
-                &format!("'__cbit_absorber_magic_for_{}", label.ident),
-                label.span(),
-            ),
-            None => Lifetime::new("'__cbit_absorber_magic_regular", Span::call_site()),
-        }
-        .into_token_stream();
+        quote! {
+            '__cbit_absorber_magic_innermost: {
+                let mut did_run = false;
+                let break_result = loop {
+                    if did_run {
+                        // The user must have used `continue`.
+                        break '__cbit_absorber_magic_innermost;
+                    }
 
-        let inner_label = label.map_or(TokenStream::new(), |label| quote! { #label: });
+                    did_run = true;
+                    { #for_body };
 
-        quote! {#outer_label: {
-            let mut did_run = false;
-            let break_result = #inner_label loop {
-                if did_run {
-                    // The user must have used `continue`.
-                    break #outer_label;
-                }
+                    // The user completed the loop.
+                    #[allow(unreachable_code)]
+                    {
+                        break '__cbit_absorber_magic_innermost;
+                    }
+                };
 
-                did_run = true;
-                { #body };
-
-                // The user completed the loop.
+                // The user broke out of the loop.
                 #[allow(unreachable_code)]
                 {
-                    break #outer_label;
+                    #break_aborter
                 }
-            };
-
-            // The user broke out of the loop.
-            #[allow(unreachable_code)]
-            {
-                #break_aborter
             }
-        }}
+        }
     };
 
-    let for_body = input.body.body;
-    let for_body = wrap_absorber(for_body, None);
-
     // Build up an onion of user-specified break layers
-
     let for_body = {
         let mut for_body = for_body;
         for break_label in in_break_labels {
-            for_body = wrap_absorber(for_body, Some(break_label));
+            let break_aborter = {
+                let variant_name = derive_early_break_variant_name(break_label);
+                aborter(quote! {
+                    #ops_::ControlFlow::Break(OurControlFlowResult::#variant_name(break_result))
+                })
+            };
+
+            let outer_label = Lifetime::new(
+                &format!("'__cbit_absorber_magic_for_{}", break_label.ident),
+                break_label.span(),
+            );
+
+            for_body = quote! {#outer_label: {
+                let break_result = #break_label: {
+                    { #for_body };
+
+                    // The user completed the loop.
+                    #[allow(unreachable_code)]
+                    {
+                        break #outer_label;
+                    }
+                };
+
+                // The user broke out of the block.
+                #[allow(unreachable_code)]
+                {
+                    #break_aborter
+                }
+            }};
         }
 
         for_body
