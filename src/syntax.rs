@@ -17,12 +17,6 @@ pub struct CbitForExpr {
     pub body: OpaqueBody,
 }
 
-#[derive(Clone)]
-pub struct CbitForExprBreaks {
-    pub kw_break: Token![break],
-    pub lt: Punctuated<Lifetime, Token![,]>,
-}
-
 impl Parse for CbitForExpr {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         Ok(Self {
@@ -36,6 +30,12 @@ impl Parse for CbitForExpr {
     }
 }
 
+#[derive(Clone)]
+pub struct CbitForExprBreaks {
+    pub kw_break: Token![break],
+    pub lt: Punctuated<CbitForExprSingleBreak, Token![,]>,
+}
+
 impl CbitForExprBreaks {
     pub fn parse(input: ParseStream) -> syn::Result<Option<Self>> {
         let Ok(kw_break) = input.parse::<Token![break]>() else {
@@ -46,6 +46,21 @@ impl CbitForExprBreaks {
             kw_break,
             lt: Punctuated::parse_separated_nonempty(input)?,
         }))
+    }
+}
+
+#[derive(Clone)]
+pub struct CbitForExprSingleBreak {
+    pub kw_loop: Option<Token![loop]>,
+    pub lt: Lifetime,
+}
+
+impl Parse for CbitForExprSingleBreak {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(Self {
+            kw_loop: input.parse()?,
+            lt: input.parse()?,
+        })
     }
 }
 

@@ -27,6 +27,9 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let derive_early_break_variant_name =
         |lt: &Lifetime| Ident::new(&format!("EarlyBreakTo_{}", lt.ident), lt.span());
 
+    let derive_early_continue_variant_name =
+        |lt: &Lifetime| Ident::new(&format!("EarlyContinueTo_{}", lt.ident), lt.span());
+
     // Define an enum for our control flow
     let control_flow_enum_def;
     let control_flow_ty_decl;
@@ -34,8 +37,13 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     {
         let break_variant_names = in_break_labels
             .iter()
-            .map(derive_early_break_variant_name)
+            .map(|v| derive_early_break_variant_name(&v.lt))
             .collect::<Vec<_>>();
+
+        let continue_variant_names = in_break_labels
+            .iter()
+            .filter(|&v| v.kw_loop.is_some())
+            .map(|v| derive_early_continue_variant_name(&v.lt));
 
         control_flow_enum_def = quote! {
             #[allow(non_camel_case_types)]
@@ -44,6 +52,7 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 EarlyReturn(EarlyReturn),
                 EarlyBreak(EarlyBreak),
                 #(#break_variant_names (#break_variant_names),)*
+                #(#continue_variant_names,)*
             }
         };
 
@@ -107,7 +116,9 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     // Build up an onion of user-specified break layers
     let for_body = {
         let mut for_body = for_body;
-        for break_label in in_break_labels {
+        for break_label_entry in in_break_labels {
+            let break_label = &break_label_entry.lt;
+
             let break_aborter = {
                 let variant_name = derive_early_break_variant_name(break_label);
                 aborter(quote! {
@@ -120,23 +131,57 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 break_label.span(),
             );
 
-            for_body = quote! {#outer_label: {
-                let break_result = #break_label: {
-                    { #for_body };
-
-                    // The user completed the loop.
-                    #[allow(unreachable_code)]
-                    {
-                        break #outer_label;
-                    }
+            if break_label_entry.kw_loop.is_some() {
+                let continue_aborter = {
+                    let variant_name = derive_early_continue_variant_name(break_label);
+                    aborter(quote! {
+                        #ops_::ControlFlow::Break(OurControlFlowResult::#variant_name)
+                    })
                 };
 
-                // The user broke out of the block.
-                #[allow(unreachable_code)]
-                {
-                    #break_aborter
-                }
-            }};
+                for_body = quote! {#outer_label: {
+                    let mut did_run = false;
+                    let break_result = #break_label: loop {
+                        if did_run {
+                            // The user must have used `continue`.
+                            #continue_aborter
+                        }
+
+                        did_run = true;
+                        { #for_body };
+
+                        // The user completed the loop.
+                        #[allow(unreachable_code)]
+                        {
+                            break #outer_label;
+                        }
+                    };
+
+                    // The user broke out of the loop.
+                    #[allow(unreachable_code)]
+                    {
+                        #break_aborter
+                    }
+                }};
+            } else {
+                for_body = quote! {#outer_label: {
+                    let break_result = #break_label: {
+                        { #for_body };
+
+                        // The user completed the loop.
+                        #[allow(unreachable_code)]
+                        {
+                            break #outer_label;
+                        }
+                    };
+
+                    // The user broke out of the block.
+                    #[allow(unreachable_code)]
+                    {
+                        #break_aborter
+                    }
+                }};
+            }
         }
 
         for_body
@@ -185,13 +230,25 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         }
     };
 
-    // Build up a list of break handlers
-    let break_out_matchers = in_break_labels.iter().map(|label| {
-        let variant_name = derive_early_break_variant_name(label);
+    // Build up a list of break/continue handlers
+    let break_out_matchers = in_break_labels.iter().map(|v| {
+        let lt = &v.lt;
+        let variant_name = derive_early_break_variant_name(lt);
         quote! {
-            OurControlFlowResult::#variant_name(break_out) => break #label break_out,
+            OurControlFlowResult::#variant_name(break_out) => break #lt break_out,
         }
     });
+
+    let continue_out_matchers = in_break_labels
+        .iter()
+        .filter(|v| v.kw_loop.is_some())
+        .map(|v| {
+            let lt = &v.lt;
+            let variant_name = derive_early_continue_variant_name(lt);
+            quote! {
+                OurControlFlowResult::#variant_name => continue #lt,
+            }
+        });
 
     // Build up our function call site
     let driver_call_site = {
@@ -221,6 +278,7 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 OurControlFlowResult::EarlyReturn(early_result) => return early_result,
                 OurControlFlowResult::EarlyBreak(result) => result,
                 #(#break_out_matchers)*
+                #(#continue_out_matchers)*
             },
             #ops_::ControlFlow::Continue(result) => result,
         }

@@ -11,34 +11,44 @@ fn main() {
 fn sum_upto(n: u64) -> u64 {
     let mut c = 0;
 
-    let _did_break = 'outer: {
-        cbit! {
-            for v in dummy(n) break 'outer {
-                // Early returns work.
-                if c > 1000 {
-                    return u64::MAX;
-                }
+    'even_more_outer: loop {
+        let _did_break = 'outer: {
+            cbit! {
+                for v in dummy(n) break 'outer, loop 'even_more_outer {
+                    // Early returns work.
+                    if c > 1000 {
+                        return u64::MAX;
+                    }
 
-                // Early breaks work.
-                if n == 10 && n == 0 {
-                    break;
-                }
+                    // Early breaks work.
+                    if n == 10 && n == 0 {
+                        break;
+                    }
 
-                // ...as do continues.
-                if n % 2 == 4 {
-                    continue;
-                }
+                    // ...as do continues.
+                    if n % 2 == 4 {
+                        continue;
+                    }
 
-                // Breaks to outer labels work as well.
-                if n == 5 && v == 3 {
-                    break 'outer true;
-                }
+                    // Breaks to outer labels work as well...
+                    if n == 5 && v == 3 {
+                        break 'outer true;
+                    }
 
-                c += v;
+                    // ...as do continues.
+                    if c < 10 {
+                        c += 1;
+                        continue 'even_more_outer;
+                    }
+
+                    c += v;
+                }
             }
-        }
-        false
-    };
+            false
+        };
+
+        break;
+    }
 
     c
 }
