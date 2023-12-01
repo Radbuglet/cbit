@@ -1,5 +1,8 @@
 [package]
 name = "cbit"
+description = "A proc-macro to use callback-based iterators with `for`-loop syntax and functionality"
+repository = "https://github.com/Radbuglet/cbit"
+license = "MIT"
 version = "0.1.0"
 edition = "2021"
 

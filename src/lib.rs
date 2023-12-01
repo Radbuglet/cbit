@@ -1,14 +1,14 @@
 #![allow(rustdoc::redundant_explicit_links)] // For cargo-rdme's sake
 
-//! Provides a proc-macro to use callback-based iterators with `for`-loop syntax and functionality.
+//! A proc-macro to use callback-based iterators with `for`-loop syntax and functionality.
 //!
 //! ## Overview
 //!
 //! `cbit` (short for **c**losure-**b**ased **it**erator) is a crate which allows you to use iterator
 //! functions which call into a closure to process each element as if they were just a regular Rust
-//! [`Iterator`](std::iter::Iterator) in a `for` loop. To create an iterator, just define a function
+//! [`Iterator`](::std::iter::Iterator) in a `for` loop. To create an iterator, just define a function
 //! which takes in a closure as its last argument. Both the function and the closure must return a
-//! [`ControlFlow`](std::ops::ControlFlow) object with some generic `Break` type.
+//! [`ControlFlow`](::std::ops::ControlFlow) object with some generic `Break` type.
 //!
 //! ```
 //! use std::ops::ControlFlow;
@@ -221,7 +221,7 @@
 //! Meanwhile, the same example written with `rustc 1.76.0-nightly (49b3924bd 2023-11-27)`'s coroutines
 //! yields far worse codegen ([permalink](https://godbolt.org/z/Kjh9q195s)):
 //!
-//! ```
+//! ```no_compile
 //! #![feature(coroutines, coroutine_trait, iter_from_coroutine)]
 //!
 //! use std::{iter::from_coroutine, ops::Coroutine};
@@ -283,9 +283,9 @@
 //! A similar thing can be seen with userland implementations of this feature such as
 //! [`genawaiter`](https://docs.rs/genawaiter/latest/genawaiter/index.html).
 //!
-//! However, what more general coroutine implementations provide in exchange for performance is immense
-//! power. Fundamentally, `cbit` iterators cannot be interwoven, making adapters such as `zip` impossible
-//! to implement—something coroutines have no problem implementing.
+//! However, what more general coroutine implementations provide in exchange for potential performance
+//! degradation is immense expressivity. Fundamentally, `cbit` iterators cannot be interwoven, making
+//! adapters such as `zip` impossible to implement—something coroutines have no problem doing.
 
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
@@ -324,7 +324,7 @@ mod syntax;
 ///
 /// The called function or method can take on any non-zero number of arguments but must accept a
 /// single-argument function closure as its last argument. The closure must be able to return a
-/// [`ControlFlow`](std::ops::ControlFlow) object with a generic `Break` type and the function must
+/// [`ControlFlow`](::std::ops::ControlFlow) object with a generic `Break` type and the function must
 /// return a `ControlFlow` object with the same `Break` type.
 ///
 /// ```
