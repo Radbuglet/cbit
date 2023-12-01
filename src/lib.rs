@@ -1,9 +1,279 @@
+#![allow(rustdoc::redundant_explicit_links)] // For cargo-rdme's sake
+
+//! Provides a proc-macro to use callback-based iterators with `for`-loop syntax and functionality.
+//!
+//! ## Overview
+//!
+//! `cbit` (short for **c**losure-**b**ased **it**erator) is a crate which allows you to use iterator
+//! functions which call into a closure to process each element as if they were just a regular Rust
+//! [`Iterator`](std::iter::Iterator) in a `for` loop. To create an iterator, just define a function
+//! which takes in a closure as its last argument. Both the function and the closure must return a
+//! [`ControlFlow`](std::ops::ControlFlow) object with some generic `Break` type.
+//!
+//! ```
+//! use std::ops::ControlFlow;
+//!
+//! fn up_to<B>(n: u64, mut f: impl FnMut(u64) -> ControlFlow<B>) -> ControlFlow<B> {
+//!     for i in 0..n {
+//!         f(i)?;
+//!     }
+//!     ControlFlow::Continue(())
+//! }
+//! ```
+//!
+//! From there, you can use the iterator like a regular `for`-loop by driving it using the
+//! [`cbit!`](cbit!) macro.
+//!
+//! ```rust
+//! # use std::ops::ControlFlow;
+//! # fn up_to<B>(n: u64, mut f: impl FnMut(u64) -> ControlFlow<B>) -> ControlFlow<B> {
+//! #     for i in 0..n {
+//! #         f(i)?;
+//! #     }
+//! #     ControlFlow::Continue(())
+//! # }
+//! fn demo(n: u64) -> u64 {
+//!     let mut c = 0;
+//!     cbit::cbit!(for i in up_to(n) {
+//!         c += i;
+//!     });
+//!     c
+//! }
+//! ```
+//!
+//! Although the body of the `for` loop is technically nested in a closure, it supports all the
+//! regular control-flow mechanisms one would expect:
+//!
+//! You can early-`return` to the outer function...
+//!
+//! ```rust
+//! # use std::ops::ControlFlow;
+//! # fn up_to<B>(n: u64, mut f: impl FnMut(u64) -> ControlFlow<B>) -> ControlFlow<B> {
+//! #     for i in 0..n {
+//! #         f(i)?;
+//! #     }
+//! #     ControlFlow::Continue(())
+//! # }
+//! fn demo(n: u64) -> u64 {
+//!     let mut c = 0;
+//!     cbit::cbit!(for i in up_to(n) {
+//!         c += i;
+//!         if c > 1000 {
+//!             return u64::MAX;
+//!         }
+//!     });
+//!     c
+//! }
+//!
+//! assert_eq!(demo(500), u64::MAX);
+//! ```
+//!
+//! You can `break` and `continue` in the body...
+//!
+//! ```rust
+//! # use std::ops::ControlFlow;
+//! # fn up_to<B>(n: u64, mut f: impl FnMut(u64) -> ControlFlow<B>) -> ControlFlow<B> {
+//! #     for i in 0..n {
+//! #         f(i)?;
+//! #     }
+//! #     ControlFlow::Continue(())
+//! # }
+//! fn demo(n: u64) -> u64 {
+//!     let mut c = 0;
+//!     cbit::cbit!('me: for i in up_to(n) {
+//!         if i == 2 {
+//!             continue 'me;  // This label is optional.
+//!         }
+//!
+//!         c += i;
+//!
+//!         if c > 5 {
+//!             break;
+//!         }
+//!     });
+//!     c
+//! }
+//!
+//! assert_eq!(demo(4), 1 + 3 + 4);
+//! ```
+//!
+//! And you can even `break` and `continue` to scopes outside the body!
+//!
+//! ```rust
+//! # use std::ops::ControlFlow;
+//! # fn up_to<B>(n: u64, mut f: impl FnMut(u64) -> ControlFlow<B>) -> ControlFlow<B> {
+//! #     for i in 0..n {
+//! #         f(i)?;
+//! #     }
+//! #     ControlFlow::Continue(())
+//! # }
+//! fn demo(n: u64) -> u64 {
+//!     let mut c = 0;
+//!     'outer_1: loop {
+//!         let did_just_break = 'outer_2: {
+//!             cbit::cbit!(for i in up_to(n) break loop 'outer_1, 'outer_2 {
+//!                 if i == 5 && c < 20 {
+//!                     continue 'outer_1;
+//!                 }
+//!
+//!                 if c == 3 {
+//!                     break 'outer_2 true;
+//!                 }
+//!                 c += i;
+//!             });
+//!             false
+//!         };
+//!
+//!         if did_just_break {
+//!             assert_eq!(c, 3);
+//!         }
+//!     }
+//!     c
+//! }
+//!
+//! demo(10);  // I'm not exactly sure what this is supposed to equal.
+//! ```
+//!
+//! Check the documentation of [`cbit!`] for more details on its syntax and specific behavior.
+//!
+//! ## Advantages and Drawbacks
+//!
+//! Closure-based iterators play much nicer with the Rust optimizer than coroutines and their
+//! [stable `async` userland counterpart](TODO) do as of `rustc 1.74.0`.
+//!
+//! Here is the disassembly of a regular loop implementation of factorial:
+//!
+//! ```
+//! pub fn regular(n: u64) -> u64 {
+//!     let mut c = 0;
+//!     for i in 0..n {
+//!         c += i;
+//!     }
+//!     c
+//! }
+//! ```
+//!
+//! ```text
+//! asm::regular:
+//! Lfunc_begin7:
+//!         push rbp
+//!         mov rbp, rsp
+//!         test rdi, rdi
+//!         je LBB7_1
+//!         lea rax, [rdi - 1]
+//!         lea rcx, [rdi - 2]
+//!         mul rcx
+//!         shld rdx, rax, 63
+//!         lea rax, [rdi + rdx - 1]
+//!         pop rbp
+//!         ret
+//! LBB7_1:
+//!         xor eax, eax
+//!         pop rbp
+//!         ret
+//! ```
+//!
+//! ...and here is the disassembly of the loop reimplemented in cbit:
+//!
+//! ```
+//! use std::ops::ControlFlow;
+//!
+//! pub fn cbit(n: u64) -> u64 {
+//!     let mut c = 0;
+//!     cbit::cbit!(for i in up_to(n) {
+//!         c += i;
+//!     });
+//!     c
+//! }
+//!
+//! fn up_to<B>(n: u64, mut f: impl FnMut(u64) -> ControlFlow<B>) -> ControlFlow<B> {
+//!     for i in 0..n {
+//!         f(i)?;
+//!     }
+//!     ControlFlow::Continue(())
+//! }
+//! ```
+//!
+//! ```text
+//! asm::cbit:
+//! Lfunc_begin8:
+//!         push rbp
+//!         mov rbp, rsp
+//!         test rdi, rdi
+//!         je LBB8_1
+//!         lea rax, [rdi - 1]
+//!         lea rcx, [rdi - 2]
+//!         mul rcx
+//!         shld rdx, rax, 63
+//!         lea rax, [rdi + rdx - 1]
+//!         pop rbp
+//!         ret
+//! LBB8_1:
+//!         xor eax, eax
+//!         pop rbp
+//!         ret
+//! ```
+//!
+//! Except for the label names, they're entirely identical!
+//!
+//! TODO
+
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use syn::{punctuated::Punctuated, Lifetime, Token};
 use syntax::CbitForExpr;
 
 mod syntax;
+
+/// A proc-macro to use callback-based iterators with for-loop syntax and functionality.
+///
+/// ## Syntax
+///
+/// ```text
+/// ('<loop-label: lifetime>:)? for <binding: pattern> in <iterator: function-call-expr>
+///     (break ((loop)? '<extern-label: lifetime>)*)?
+/// {
+///     <body: token stream>
+/// }
+/// ```
+///
+/// Arguments:
+///
+/// - `loop-label`: This is the optional label used by your virtual loop. `break`'ing or `continue`'ing
+///   to this label will break and continue the iterator respectively.
+/// - `binding`: This is the irrefutable pattern the iterator's arguments will be decomposed into.
+/// - `iterator`: Syntactically, this can be any (potentially generic) function or method call
+///   expression and generics can be explicitly supplied if desired. See the [iteration protocol](#iteration-protocol)
+///   section for details on the semantic requirements for this function.
+/// - The loop also contains an optional list of external `break` labels which is started by the
+///   `break` keyword and is followed by a non-empty non-trailing comma-separated list of...
+///      - An optional `loop` keyword which, if specified, asserts that the label can accept `continue`s
+///        in addition to `break`s.
+///      - `extern-label`: the label the `cbit!` body is allowed to `break` or `continue` out to.
+///
+/// ## Iteration Protocol
+///
+/// The called function or method can take on any non-zero number of arguments but must accept a
+/// single-argument function closure as its last argument. The closure must be able to accept a
+/// [`ControlFlow`] object with a generic `Break` type and the function must return a [`ControlFlow`]
+/// object with the same `Break` type.
+///
+/// ```
+/// use std::{iter::IntoIterator, ops::ControlFlow};
+///
+/// fn enumerate<I: IntoIterator, B>(
+///     values: I,
+///     index_offset: usize,
+///     mut f: impl FnMut((usize, I::Item),
+/// ) -> ControlFlow<B>) -> ControlFlow<B> {
+///     for (i, v) in values.into_iter().enumerate() {
+///         f((i + index_offset, v))?;
+///     }
+///     ControlFlow::Continue(())
+/// }
+/// ```
+///
+/// TODO
 
 #[proc_macro]
 pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -81,6 +351,7 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     let for_body = input.body.body;
     let for_body = {
+        let optional_label = &input.label;
         let break_aborter = aborter(quote! {
             #ops_::ControlFlow::Break(OurControlFlowResult::EarlyBreak(break_result))
         });
@@ -88,7 +359,7 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         quote! {
             '__cbit_absorber_magic_innermost: {
                 let mut did_run = false;
-                let break_result = loop {
+                let break_result = #optional_label loop {
                     if did_run {
                         // The user must have used `continue`.
                         break '__cbit_absorber_magic_innermost;
@@ -251,14 +522,32 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         });
 
     // Build up our function call site
-    let driver_call_site = {
-        let driver_attrs = &input.call.attrs;
-        let driver_fn_expr = &input.call.func;
-        let driver_fn_args = input.call.args.iter();
+    let driver_call_site = match &input.call {
+        syntax::AnyCallExpr::Function(call) => {
+            let driver_attrs = &call.attrs;
+            let driver_fn_expr = &call.func;
+            let driver_fn_args = call.args.iter();
 
-        quote! {
-            #(#driver_attrs)*
-            let result: #control_flow_ty_use = #driver_fn_expr (#(#driver_fn_args,)* #for_body);
+            quote! {
+                #(#driver_attrs)*
+                let result: #control_flow_ty_use = #driver_fn_expr (#(#driver_fn_args,)* #for_body);
+            }
+        }
+        syntax::AnyCallExpr::Method(call) => {
+            let driver_attrs = &call.attrs;
+            let driver_receiver_expr = &call.receiver;
+            let driver_method = &call.method;
+            let driver_turbo = &call.turbofish;
+            let driver_fn_args = call.args.iter();
+
+            quote! {
+                #(#driver_attrs)*
+                let result: #control_flow_ty_use =
+                    #driver_receiver_expr.#driver_method #driver_turbo (
+                        #(#driver_fn_args,)*
+                        #for_body
+                    );
+            }
         }
     };
 

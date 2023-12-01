@@ -4,15 +4,16 @@ use syn::{
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
     token::Brace,
-    ExprCall, Lifetime, Pat, Token,
+    Expr, ExprCall, ExprMethodCall, Label, Lifetime, Pat, Token,
 };
 
 #[derive(Clone)]
 pub struct CbitForExpr {
+    pub label: Option<Label>,
     pub kw_for: Token![for],
     pub body_pattern: Pat,
     pub kw_in: Token![in],
-    pub call: ExprCall,
+    pub call: AnyCallExpr,
     pub breaks: Option<CbitForExprBreaks>,
     pub body: OpaqueBody,
 }
@@ -20,6 +21,7 @@ pub struct CbitForExpr {
 impl Parse for CbitForExpr {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         Ok(Self {
+            label: input.parse()?,
             kw_for: input.parse()?,
             body_pattern: Pat::parse_single(input)?,
             kw_in: input.parse()?,
@@ -61,6 +63,22 @@ impl Parse for CbitForExprSingleBreak {
             kw_loop: input.parse()?,
             lt: input.parse()?,
         })
+    }
+}
+
+#[derive(Clone)]
+pub enum AnyCallExpr {
+    Function(ExprCall),
+    Method(ExprMethodCall),
+}
+
+impl Parse for AnyCallExpr {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        match input.parse::<Expr>()? {
+            Expr::Call(func) => Ok(Self::Function(func)),
+            Expr::MethodCall(method) => Ok(Self::Method(method)),
+            _ => Err(input.error("expected a function or method call")),
+        }
     }
 }
 
