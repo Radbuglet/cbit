@@ -399,6 +399,27 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let future_ = quote! { #core_::future };
     let option_ = quote! { #core_::option::Option };
 
+    let hg_did_run = Ident::new("__cbit_internal_did_run", Span::mixed_site());
+    let hg_body_input = Ident::new("__cbit_internal_body_input", Span::mixed_site());
+    let hg_how_to_resolve_pending =
+        Ident::new("__cbit_internal_how_to_resolve_pending", Span::mixed_site());
+    let hg_break_result = Ident::new("__cbit_internal_break_result", Span::mixed_site());
+    let hg_body = Ident::new("__cbit_internal_body", Span::mixed_site());
+    let hg_end_result = Ident::new("__cbit_internal_end_result", Span::mixed_site());
+    let hg_result = Ident::new("__cbit_internal_result", Span::mixed_site());
+
+    #[expect(non_snake_case)]
+    let hg_OurControlFlowResult =
+        Ident::new("__CbitInternalOurControlFlowResult", Span::mixed_site());
+
+    #[expect(non_snake_case)]
+    let hg_OurControlFlow = Ident::new("__CbitInternalOurControlFlow", Span::mixed_site());
+
+    let hg_absorber_magic_innermost = Lifetime::new(
+        "'__cbit_internal_absorber_magic_innermost",
+        Span::mixed_site(),
+    );
+
     // Extract our break labels
     let empty_punct_list = Punctuated::new();
     let in_break_labels = input
@@ -430,7 +451,7 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         control_flow_enum_def = quote! {
             #[allow(non_camel_case_types)]
             #[allow(clippy::enum_variant_names)]
-            enum OurControlFlowResult<EarlyReturn, EarlyBreak #(, #break_variant_names)*> {
+            enum #hg_OurControlFlowResult<EarlyReturn, EarlyBreak #(, #break_variant_names)*> {
                 EarlyReturn(EarlyReturn),
                 EarlyBreak(EarlyBreak),
                 #(#break_variant_names (#break_variant_names),)*
@@ -440,8 +461,8 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
         control_flow_ty_decl = quote! {
             #[allow(non_camel_case_types)]
-            type OurControlFlow<EarlyReturn, EarlyBreak #(, #break_variant_names)*> = #ops_::ControlFlow<
-                OurControlFlowResult<EarlyReturn, EarlyBreak #(, #break_variant_names)*>,
+            type #hg_OurControlFlow<EarlyReturn, EarlyBreak #(, #break_variant_names)*> = #ops_::ControlFlow<
+                #hg_OurControlFlowResult<EarlyReturn, EarlyBreak #(, #break_variant_names)*>,
                 EarlyBreak,
             >;
         };
@@ -449,13 +470,13 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         let underscores =
             (0..(break_variant_names.len() + 2)).map(|_| Token![_](Span::call_site()));
 
-        control_flow_ty_use = quote! { OurControlFlow<#(#underscores),*> };
+        control_flow_ty_use = quote! { #hg_OurControlFlow<#(#underscores),*> };
     }
 
     // Define our initial break layer
     let aborter = |resolution: TokenStream| {
         quote! {
-            how_to_resolve_pending = #option_::Some(#resolution);
+            #hg_how_to_resolve_pending = #option_::Some(#resolution);
             #future_::pending::<()>().await;
             #core_::unreachable!();
         }
@@ -463,26 +484,29 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     let for_body = input.body.body;
     let for_body = {
+        let body_input_pat = &input.body_pattern;
         let optional_label = &input.label;
         let break_aborter = aborter(quote! {
-            #ops_::ControlFlow::Break(OurControlFlowResult::EarlyBreak(break_result))
+            #ops_::ControlFlow::Break(#hg_OurControlFlowResult::EarlyBreak(#hg_break_result))
         });
 
         quote! {
-            '__cbit_absorber_magic_innermost: {
-                let mut did_run = false;
-                let break_result = #optional_label loop {
-                    if did_run {
+            #hg_absorber_magic_innermost: {
+                let mut #hg_did_run = false;
+                let #hg_break_result = #optional_label loop {
+                    if #hg_did_run {
                         // The user must have used `continue`.
-                        break '__cbit_absorber_magic_innermost #core_::default::Default::default();
+                        break #hg_absorber_magic_innermost #core_::default::Default::default();
                     }
 
-                    did_run = true;
-                    let break_result = { #for_body };
+                    #hg_did_run = true;
+
+                    let #body_input_pat = #hg_body_input.take().unwrap();
+                    let #hg_break_result = { #for_body };
 
                     // The user completed the loop.
                     #[allow(unreachable_code)]
-                    break '__cbit_absorber_magic_innermost break_result;
+                    break #hg_absorber_magic_innermost #hg_break_result;
                 };
 
                 // The user broke out of the loop.
@@ -503,37 +527,37 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             let break_aborter = {
                 let variant_name = derive_early_break_variant_name(break_label);
                 aborter(quote! {
-                    #ops_::ControlFlow::Break(OurControlFlowResult::#variant_name(break_result))
+                    #ops_::ControlFlow::Break(#hg_OurControlFlowResult::#variant_name(#hg_break_result))
                 })
             };
 
             let outer_label = Lifetime::new(
-                &format!("'__cbit_absorber_magic_for_{}", break_label.ident),
-                break_label.span(),
+                &format!("'__cbit_internal_absorber_magic_for_{}", break_label.ident),
+                Span::mixed_site(),
             );
 
             if break_label_entry.kw_loop.is_some() {
                 let continue_aborter = {
                     let variant_name = derive_early_continue_variant_name(break_label);
                     aborter(quote! {
-                        #ops_::ControlFlow::Break(OurControlFlowResult::#variant_name)
+                        #ops_::ControlFlow::Break(#hg_OurControlFlowResult::#variant_name)
                     })
                 };
 
                 for_body = quote! {#outer_label: {
-                    let mut did_run = false;
-                    let break_result = #break_label: loop {
-                        if did_run {
+                    let mut #hg_did_run = false;
+                    let #hg_break_result = #break_label: loop {
+                        if #hg_did_run {
                             // The user must have used `continue`.
                             #continue_aborter
                         }
 
-                        did_run = true;
-                        let break_result = { #for_body };
+                        #hg_did_run = true;
+                        let #hg_break_result = { #for_body };
 
                         // The user completed the loop.
                         #[allow(unreachable_code)]
-                        break #outer_label break_result;
+                        break #outer_label #hg_break_result;
                     };
 
                     // The user broke out of the loop.
@@ -544,12 +568,12 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 }};
             } else {
                 for_body = quote! {#outer_label: {
-                    let break_result = #break_label: {
-                        let break_result = { #for_body };
+                    let #hg_break_result = #break_label: {
+                        let #hg_break_result = { #for_body };
 
                         // The user completed the loop.
                         #[allow(unreachable_code)]
-                        break #outer_label break_result;
+                        break #outer_label #hg_break_result;
                     };
 
                     // The user broke out of the block.
@@ -566,39 +590,26 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     // Build up a layer to capture early returns and generally process arguments
     let for_body = {
-        let body_input_pat = &input.body_pattern;
-        let termination_aborter = aborter(quote! { #ops_::ControlFlow::Continue(end_result) });
+        let termination_aborter = aborter(quote! { #ops_::ControlFlow::Continue(#hg_end_result) });
         quote! {
-            |#body_input_pat| {
-                let mut how_to_resolve_pending = #option_::None;
+            |#hg_body_input| {
+                let mut #hg_body_input = #option_::Some(#hg_body_input);
+                let mut #hg_how_to_resolve_pending = #option_::None;
 
-                let body = #pin_::pin!(async {
-                    let end_result = { #for_body };
+                let #hg_body = #pin_::pin!(async {
+                    let #hg_end_result = { #for_body };
 
                     #[allow(unreachable_code)] { #termination_aborter }
                 });
 
                 match #future_::Future::poll(
-                    body,
-                    &mut #task_::Context::from_waker(&{  // TODO: Use `Waker::noop` once it stabilizes
-                        const VTABLE: #task_::RawWakerVTable = #task_::RawWakerVTable::new(
-                            // Cloning just returns a new no-op raw waker
-                            |_| RAW,
-                            // `wake` does nothing
-                            |_| {},
-                            // `wake_by_ref` does nothing
-                            |_| {},
-                            // Dropping does nothing as we don't allocate anything
-                            |_| {},
-                        );
-                        const RAW: #task_::RawWaker = #task_::RawWaker::new(#core_::ptr::null(), &VTABLE);
-                        unsafe { #task_::Waker::from_raw(RAW) }
-                    })
+                    #hg_body,
+                    &mut #task_::Context::from_waker(&#task_::Waker::noop())
                 ) {
                     #task_::Poll::Ready(early_return) => #ops_::ControlFlow::Break(
-                        OurControlFlowResult::EarlyReturn(early_return),
+                        #hg_OurControlFlowResult::EarlyReturn(early_return),
                     ),
-                    #task_::Poll::Pending => how_to_resolve_pending.expect(
+                    #task_::Poll::Pending => #hg_how_to_resolve_pending.expect(
                         "the async block in a cbit iterator is an implementation detail; do not \
                          `.await` in it!"
                     ),
@@ -612,7 +623,7 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         let lt = &v.lt;
         let variant_name = derive_early_break_variant_name(lt);
         quote! {
-            OurControlFlowResult::#variant_name(break_out) => break #lt break_out,
+            #hg_OurControlFlowResult::#variant_name(break_out) => break #lt break_out,
         }
     });
 
@@ -623,7 +634,7 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             let lt = &v.lt;
             let variant_name = derive_early_continue_variant_name(lt);
             quote! {
-                OurControlFlowResult::#variant_name => continue #lt,
+                #hg_OurControlFlowResult::#variant_name => continue #lt,
             }
         });
 
@@ -636,7 +647,7 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
             quote! {
                 #(#driver_attrs)*
-                let result: #control_flow_ty_use = #driver_fn_expr (#(#driver_fn_args,)* #for_body);
+                let #hg_result: #control_flow_ty_use = #driver_fn_expr (#(#driver_fn_args,)* #for_body);
             }
         }
         syntax::AnyCallExpr::Method(call) => {
@@ -648,7 +659,7 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
             quote! {
                 #(#driver_attrs)*
-                let result: #control_flow_ty_use =
+                let #hg_result: #control_flow_ty_use =
                     #driver_receiver_expr.#driver_method #driver_turbo (
                         #(#driver_fn_args,)*
                         #for_body
@@ -668,10 +679,10 @@ pub fn cbit(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         // let result = my_fn(args, |...| async { ... });
         #driver_call_site
 
-        match result {
+        match #hg_result {
             #ops_::ControlFlow::Break(result) => match result {
-                OurControlFlowResult::EarlyReturn(early_result) => return early_result,
-                OurControlFlowResult::EarlyBreak(result) => result,
+                #hg_OurControlFlowResult::EarlyReturn(early_result) => return early_result,
+                #hg_OurControlFlowResult::EarlyBreak(result) => result,
                 #(#break_out_matchers)*
                 #(#continue_out_matchers)*
             },

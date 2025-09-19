@@ -10,9 +10,9 @@ use syn::{
 #[derive(Clone)]
 pub struct CbitForExpr {
     pub label: Option<Label>,
-    pub kw_for: Token![for],
+    pub _kw_for: Token![for],
     pub body_pattern: Pat,
-    pub kw_in: Token![in],
+    pub _kw_in: Token![in],
     pub call: AnyCallExpr,
     pub breaks: Option<CbitForExprBreaks>,
     pub body: OpaqueBody,
@@ -22,9 +22,9 @@ impl Parse for CbitForExpr {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         Ok(Self {
             label: input.parse()?,
-            kw_for: input.parse()?,
+            _kw_for: input.parse()?,
             body_pattern: Pat::parse_single(input)?,
-            kw_in: input.parse()?,
+            _kw_in: input.parse()?,
             call: input.parse()?,
             breaks: CbitForExprBreaks::parse(input)?,
             body: input.parse()?,
@@ -34,7 +34,7 @@ impl Parse for CbitForExpr {
 
 #[derive(Clone)]
 pub struct CbitForExprBreaks {
-    pub kw_break: Token![break],
+    pub _kw_break: Token![break],
     pub lt: Punctuated<CbitForExprSingleBreak, Token![,]>,
 }
 
@@ -45,7 +45,7 @@ impl CbitForExprBreaks {
         };
 
         Ok(Some(Self {
-            kw_break,
+            _kw_break: kw_break,
             lt: Punctuated::parse_separated_nonempty(input)?,
         }))
     }
@@ -84,7 +84,7 @@ impl Parse for AnyCallExpr {
 
 #[derive(Clone)]
 pub struct OpaqueBody {
-    pub brace: Brace,
+    pub _brace: Brace,
     pub body: TokenStream,
 }
 
@@ -92,7 +92,7 @@ impl Parse for OpaqueBody {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let body;
         Ok(Self {
-            brace: braced!(body in input),
+            _brace: braced!(body in input),
             body: body.parse()?,
         })
     }
